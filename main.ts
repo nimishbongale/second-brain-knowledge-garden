@@ -7,7 +7,10 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TFile,
 } from "obsidian";
+const keyword_extractor = require("keyword-extractor");
+import fetch, { AbortError } from "node-fetch";
 
 interface KnowledgeGardenSettings {
 	mySetting: string;
@@ -20,97 +23,199 @@ const DEFAULT_SETTINGS: KnowledgeGardenSettings = {
 export default class KnowledgeGarden extends Plugin {
 	settings: KnowledgeGardenSettings;
 
-	async onload() {
-		await this.loadSettings();
+	summarizeText = (text: string) => {
+		const cohere = require("cohere-ai");
+		cohere.init("Lh999GxxZj2soQvi7oviV3z4N8H6MK8lLOxtgsG6"); // This is your trial API key
+		(async () => {
+			const response = await cohere.summarize({
+				text: text,
+				format: "bullets",
+				model: "summarize-xlarge",
+				additional_command: "",
+				temperature: 0.1,
+			});
+			console.log("Summary:", response.body.summary);
+			new Notice(response.body.summary, 0);
+		})();
+	};
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon(
-			"dice",
-			"Sample Plugin",
-			(evt: MouseEvent) => {
-				// Called when the user clicks the icon.
-				new Notice("This is a notice!");
+	createNode = async (
+		newFileName?: string,
+		fileContent?: string
+	): Promise<any> => {
+		const fileName: string =
+			(newFileName ? newFileName + "_" : "") +
+			new Date()
+				.toISOString()
+				// @ts-ignore
+				.replaceAll(":", "-");
+		new Notice(`Created ${fileName}.md Note!`, 0);
+
+		// TODO: Think about data to stuff within a new file
+		const file = await this.app.vault.create(
+			fileName + ".md",
+			fileContent ?? ""
+		);
+		return {
+			fileName,
+			fileContent,
+			file,
+		};
+	};
+
+	autocultivate = async () => {
+		// Add relevant group of notes linked to root (common topic summary)
+		// Create [1,3] files, backlink to temp root
+		// Backlink to [1, 3] existing files
+		// Attach to root this new page
+		// run an autocultivate on CRON (small CRON for demo)
+
+		// random number from 1 to 3
+		const randomNumber: number = Math.floor(Math.random() * 3) + 1;
+
+		// global root
+		const root = this.app.vault.getFiles()?.[0];
+
+		// local root
+		const {
+			fileName: localRootFileName,
+			fileContent,
+			file: localRoot,
+		} = await this.createNode("localroot", "");
+
+		// create group of nodes, attach to local root
+		// get most frequent tags/based on relevance
+		// VNqYTzse9q6L-VLfNz9ZAgFqGPYdYF-4yWvL634CzuQ
+		for (let i = 1; i <= randomNumber; i++) {
+			var url = "https://v3-api.newscatcherapi.com/api/search?q=AWS";
+
+			const allFiles = this.app.vault.getFiles();
+
+			const reactFile = allFiles?.find(
+				(file: TFile) => "React Augmentation.md" === file.name
+			);
+
+			const { fileName, fileContent, file } = await this.createNode(
+				undefined,
+				(await this.app.vault.read(reactFile as TFile)) as string
+			);
+			this.app.vault.append(file, `[[${localRootFileName}.md]]`);
+			// });
+		}
+
+		// attach local root to global root
+		this.app.vault.append(root, `[[${localRootFileName}.md]]`);
+	};
+
+	async onload() {
+		this.addRibbonIcon(
+			"create-new",
+			"Plant your data seed",
+			// onClick
+			() => {
+				this.createNode();
 			}
 		);
 
-		this.addRibbonIcon("dice", "Print leaf types", () => {
-			this.app.workspace.iterateAllLeaves((leaf) => {
-				console.log(
-					"leaf.getViewState().group?.getDisplayText().toString()",
-					console.log(
-						this.app.vault.getFiles(),
-						typeof this.app.vault.getFiles()[0]
-					)
+		this.addRibbonIcon(
+			"star-list",
+			"Organize your plants",
+			// onClick
+			async () => {
+				const activeFile = (await this.app.workspace.activeEditor
+					?.file) as TFile;
+				const fileContent: string = await this.app.vault.read(
+					activeFile
 				);
-			});
-		});
-
-		// to add a backlink
-		this.app.vault.append(this.app.vault.getFiles()[0], "[[index.md]]");
-
-		// to create a file (handle error scenario)
-		this.app.vault.create("nimish.md", "Crazy!");
-
-		// to get all files in vault
-		console.log(await this.app.vault.getFiles());
-
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass("my-plugin-ribbon-class");
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText("Status Bar Text");
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: "open-sample-modal-simple",
-			name: "Open sample modal (simple)",
-			callback: () => {
-				new SampleModal(this.app).open();
-			},
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: "sample-editor-command",
-			name: "Sample editor command",
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection("Sample Editor Command");
-			},
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: "open-sample-modal-complex",
-			name: "Open sample modal (complex)",
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView =
-					this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
+				const extraction_result = keyword_extractor.extract(
+					fileContent,
+					{
+						language: "english",
+						remove_digits: true,
+						return_changed_case: true,
+						remove_duplicates: true,
 					}
+				);
+				const topTags = extraction_result
+					.sort((a: string, b: string) => b.length - a.length)
+					.slice(0, 5);
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			},
-		});
+				const topTagsString: string = " #" + topTags?.join(" #");
+				this.app.vault.append(activeFile, topTagsString);
+			}
+		);
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.addRibbonIcon(
+			"blocks",
+			"Cultivate your plants",
+			// onClick
+			async () => {
+				new Notice("Autocultivate", 0);
+				this.autocultivate();
+			}
+		);
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, "click", (evt: MouseEvent) => {
-			console.log("click", evt);
-		});
+		this.addRibbonIcon(
+			"star",
+			"Harvest your fruits",
+			// onClick
+			async () => {
+				new Notice("Autoharvest", 0);
+				// Summary digest report, use Notification (Flash Card concept)
+				// getLastModifiedFiles, run summarizer (ChatGPT)
+				const recentFiles: any =
+					// @ts-ignore
+					this.app.workspace?.recentFileTracker?.lastOpenFiles.slice(
+						0,
+						3
+					);
+				const allFiles = this.app.vault.getFiles();
+				console.error("recentFiles", recentFiles);
+				const neededFiles = allFiles?.filter((file: TFile) =>
+					recentFiles.includes(file?.path)
+				);
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(
-			window.setInterval(() => console.log("setInterval"), 5 * 60 * 1000)
+				let recentFileContents: any = "";
+				neededFiles?.forEach(async (file: TFile) => {
+					const abc = await this.app.vault.read(file);
+					recentFileContents += abc;
+				});
+
+				setTimeout(() => {
+					console.log(recentFileContents);
+					if (recentFileContents.length > 500) {
+						this.summarizeText(recentFileContents);
+					} else {
+						this.summarizeText(
+							"{:<499}".format(recentFileContents)
+						);
+					}
+				}, 5000);
+			}
+		);
+
+		this.addRibbonIcon(
+			"crossed-star",
+			"Prune your trees",
+			//onClick
+			() => {
+				new Notice("Intelligent Pruning", 0);
+				const lastOpenFiles: any =
+					// @ts-ignore
+					this.app.workspace?.recentFileTracker?.lastOpenFiles;
+				const randomNumber: number = Math.floor(Math.random() * 3) + 1;
+				const recentFiles: any = lastOpenFiles?.slice(
+					Math.max(lastOpenFiles.length - randomNumber, 0)
+				);
+				const allFiles = this.app.vault.getFiles();
+
+				const neededFiles = allFiles?.filter((file: TFile) =>
+					recentFiles?.includes(file.name)
+				);
+				neededFiles?.forEach((element: any) => {
+					this.app.vault.append(element, "[[archive.md]]");
+				});
+			}
 		);
 	}
 
